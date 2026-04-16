@@ -29,7 +29,7 @@ new const float:MAP_SAFE_HALF = 58.0
 new const float:MAP_EDGE_MARGIN = 2.5
 
 new const float:MOVE_CHECK_DT = 0.35
-new const float:MOVE_EPS = 0.07
+new const float:MOVE_EPS = 0.25
 new const STUCK_MAX = 5 
 new const float:BACKOFF_TIME = 0.50
 new const float:BACKOFF_ANGLE = 0.90
@@ -392,6 +392,7 @@ formationBot() {
   new backoffChainCount = 0
   new float:backoffChainResetUntil = -1000.0
   new float:backMotionStart = -1000.0
+  new float:stuckCycleSide = 1.0
 
   walk()
 
@@ -413,7 +414,8 @@ formationBot() {
         noBackUntil = now + BACK_PHASE_MIN_GAP
         backoffChainCount = 0
         backoffChainResetUntil = -1000.0
-        forceBypassSide = (random(2) == 0 ? 1.0 : -1.0)
+        forceBypassSide = stuckCycleSide
+        stuckCycleSide = -stuckCycleSide
         forceBypassUntil = now + BOT_FORCE_BYPASS_TIME + 0.22
 
         if(isWalkingbk() || isWalking() || isRunning() || isWalkingcr())
@@ -873,9 +875,13 @@ formationBot() {
       ++backoffChainCount
       backoffChainResetUntil = now + 2.0
 
+      // Patrón simple y cíclico: luego del retroceso lateraliza derecha, luego izquierda.
+      new float:cycleSide = stuckCycleSide
+      stuckCycleSide = -stuckCycleSide
+
       // Si encadena varios retrocesos, forzar salida por bypass adelante/lateral.
       if(backoffChainCount >= 3) {
-        forceBypassSide = (random(2) == 0 ? 1.0 : -1.0)
+        forceBypassSide = cycleSide
         forceBypassUntil = now + BOT_FORCE_BYPASS_TIME + 0.20
         noBackUntil = now + BACK_PHASE_MIN_GAP
         backoffUntil = -1000.0
@@ -887,9 +893,9 @@ formationBot() {
           // ~1.5s+ inmovil -> retroceso corto para destrabar y reintentar ruta.
           backoffUntil = now + BACKOFF_TIME + 0.10
           blockScanRearmUntil = backoffUntil + BLOCK_SCAN_BACK_TIME
-          backoffSide = (random(2) == 0 ? 1.0 : -1.0)
+          backoffSide = cycleSide
         } else {
-          forceBypassSide = (random(2) == 0 ? 1.0 : -1.0)
+          forceBypassSide = cycleSide
           forceBypassUntil = now + BOT_FORCE_BYPASS_TIME
           backoffUntil = -1000.0
           blockScanRearmUntil = -1000.0
