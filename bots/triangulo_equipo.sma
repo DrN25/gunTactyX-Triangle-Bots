@@ -27,7 +27,7 @@ new const float:MAP_EDGE_MARGIN = 2.5
 
 new const float:MOVE_CHECK_DT = 0.35
 new const float:MOVE_EPS = 0.07
-new const STUCK_MAX = 3
+new const STUCK_MAX = 5
 new const float:BACKOFF_TIME = 0.50
 new const float:BACKOFF_ANGLE = 0.90
 new const float:WALL_TRAP_DIST = 1.20
@@ -66,7 +66,6 @@ new const float:YIELD_BACK_ONLY_TIME = 0.24
 new const float:YIELD_SAME_SENDER_COOLDOWN = 0.55
 new const float:YIELD_GLOBAL_REARM_DT = 0.25
 new const float:BLOCK_SCAN_BACK_TIME = 0.20
-new const float:BLOCK_SCAN_REARM_DT = 0.60
 new const float:BACK_PHASE_MIN_GAP = 2.20
 
 new const float:LOOP_DT = 0.04
@@ -332,10 +331,7 @@ formationBot() {
   if(targetSafeHalf < TRI_FIT_MIN_RADIUS + 1.0)
     targetSafeHalf = safeHalf
   clampPointInsideSafe(tx, ty, mapCx, mapCy, targetSafeHalf)
-
-  new initDestX = floatround(tx)
-  new initDestY = floatround(ty)
-  printf("INITIAL bot %d - destino %d,%d^n", getID(), initDestX, initDestY)
+  printf("INIT %d %d,%d^n", getID(), floatround(tx), floatround(ty))
 
   new float:lastCheck = -1000.0
   new float:lastX = cx
@@ -556,6 +552,19 @@ formationBot() {
       if(sight() < WALL_AVOID_DIST)
         rotateTo(getDirection() - backoffSide * PI/2.5)
 
+      if(isStanding() || isWalking() || isRunning() || isWalkingcr())
+        walkbk()
+
+      wait(LOOP_DT)
+      continue
+    }
+
+    // Tras retroceder, ejecutar un lateral corto para no volver al mismo choque.
+    if(now >= backoffUntil && now < blockScanRearmUntil) {
+      rotateTo(getDirection() + backoffSide * PI/2.0)
+      if(sight() < WALL_AVOID_DIST)
+        rotateTo(getDirection() - backoffSide * PI/2.4)
+
       if(canIssueWalk())
         walk()
 
@@ -617,6 +626,7 @@ formationBot() {
     new bool:hasFrontBlock = getFrontBlockInfo(blockYaw, blockDist, blockId)
 
     if(hasFrontBlock) {
+
       if(blockId == frontBlockId && now - lastFrontBlockTick <= BOT_BLOCK_REPEAT_DT)
         ++frontBlockCount
       else
@@ -744,6 +754,7 @@ formationBot() {
         noBackUntil = wallBreakBackUntil + BACK_PHASE_MIN_GAP
         wallEscapeUntil = -1000.0
         backoffUntil = -1000.0
+        blockScanRearmUntil = -1000.0
         wallTrapCount = 0
         stuckCount = 0
 
@@ -761,20 +772,10 @@ formationBot() {
     }
 
     if(stuckCount >= STUCK_MAX) {
-      // ~1 segundo inmovil -> paso lateral corto (izq/der) para destrabar.
-      if(now >= blockScanRearmUntil &&
-         now >= yieldUntil &&
-         now >= wallBreakSideUntil &&
-         now >= deadlockSideUntil &&
-         now >= wallEscapeUntil &&
-         now >= noBackUntil) {
-        blockScanSide = (random(2) == 0 ? 1.0 : -1.0)
-        blockScanBackUntil = now + BLOCK_SCAN_BACK_TIME
-        blockScanRearmUntil = blockScanBackUntil + BLOCK_SCAN_REARM_DT
-      } else {
-        backoffUntil = now + BACKOFF_TIME
-        backoffSide = (random(2) == 0 ? 1.0 : -1.0)
-      }
+      // ~1.5s+ inmovil -> retroceso corto para destrabar y reintentar ruta.
+      backoffUntil = now + BACKOFF_TIME + 0.10
+      blockScanRearmUntil = backoffUntil + BLOCK_SCAN_BACK_TIME
+      backoffSide = (random(2) == 0 ? 1.0 : -1.0)
 
       stuckCount = 0
     }
