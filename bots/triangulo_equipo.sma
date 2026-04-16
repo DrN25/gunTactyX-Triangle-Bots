@@ -17,10 +17,10 @@ new const float:WALL_AVOID_DIST = 2.2
 new const float:BLOCK_DIST = 1.9
 new const float:BLOCK_YAW = 0.65
 
-new const float:TRI_BASE_RADIUS = 8.0
-new const float:TRI_PER_BOT_RADIUS = 0.90
-new const float:TRI_MIN_RADIUS = 7.0
-new const float:TRI_MAX_RADIUS = 24.0
+new const float:TRI_BASE_RADIUS = 6.0
+new const float:TRI_PER_BOT_RADIUS = 0.55
+new const float:TRI_MIN_RADIUS = 5.0
+new const float:TRI_MAX_RADIUS = 14.0
 new const float:MAP_SAFE_HALF = 58.0
 new const float:MAP_EDGE_MARGIN = 2.5
 
@@ -32,6 +32,7 @@ new const float:BACKOFF_ANGLE = 0.90
 new const float:WALL_TRAP_DIST = 1.20
 new const float:WALL_ESCAPE_TIME = 0.75
 new const float:WALL_ESCAPE_ANGLE = 1.05
+new const float:WALL_ESCAPE_REARM_DT = 0.30
 new const WALL_TRAP_COUNT_MAX = 8
 new const float:WALL_TRAP_COUNT_DT = 0.20
 
@@ -42,6 +43,30 @@ new const float:BOT_YIELD_ANGLE = 1.10
 new const float:BOT_YIELD_EXTRA_TIME = 0.30
 new const float:BOT_FORCE_BYPASS_TIME = 0.45
 new const float:BOT_FORCE_BYPASS_ANGLE = 0.85
+new const float:DEADLOCK_BACK_TIME = 1.10
+new const float:DEADLOCK_SIDE_TIME = 0.62
+new const float:DEADLOCK_SIDE_ANGLE = 1.28
+new const float:DEADLOCK_COOLDOWN = 0.40
+new const float:WALL_BREAK_BACK_TIME = 1.20
+new const float:WALL_BREAK_SIDE_TIME = 0.85
+new const float:WALL_BREAK_ANGLE = 1.45
+new const float:WALL_BREAK_REARM_DT = 1.00
+new const float:EDGE_NEAR_MARGIN = 1.8
+new const float:TRI_BORDER_CLEARANCE = 9.5
+new const float:TRI_TARGET_MARGIN = 1.2
+new const float:TRI_FIT_MIN_RADIUS = 3.5
+new const float:CENTER_PULL_TO_ORIGIN = 0.15
+
+new const PASS_BASE_CHANNEL = 140
+new const WORD_PASS_LEFT = 9101
+new const WORD_PASS_RIGHT = 9102
+new const float:PASS_RESEND_SAME_TARGET_DT = 0.90
+new const float:YIELD_BACK_ONLY_TIME = 0.24
+new const float:YIELD_SAME_SENDER_COOLDOWN = 0.55
+new const float:YIELD_GLOBAL_REARM_DT = 0.25
+new const float:BLOCK_SCAN_BACK_TIME = 0.20
+new const float:BLOCK_SCAN_REARM_DT = 0.60
+new const float:BACK_PHASE_MIN_GAP = 2.20
 
 new const float:LOOP_DT = 0.04
 
@@ -163,6 +188,12 @@ stock float:getPairSideSign(idA, idB) {
   return -1.0
 }
 
+stock getPassChannelFor(botId) {
+  if(botId < 0)
+    botId = 0
+  return PASS_BASE_CHANNEL + botId
+}
+
 stock triangleVertices(float:cx, float:cy,
                        float:r,
                        &float:x0, &float:y0,
@@ -199,8 +230,18 @@ stock fitTriangleInsideMap(&float:cx, &float:cy, &float:r,
     cx = mapCx + (cx - mapCx) * 0.78
     cy = mapCy + (cy - mapCy) * 0.78
     r *= 0.90
-    r = clampf(r, TRI_MIN_RADIUS, TRI_MAX_RADIUS)
+    r = clampf(r, TRI_FIT_MIN_RADIUS, TRI_MAX_RADIUS)
   }
+
+  if(r > safeHalf * 0.95)
+    r = safeHalf * 0.95
+  if(r < TRI_FIT_MIN_RADIUS)
+    r = TRI_FIT_MIN_RADIUS
+
+  new float:centerHalf = safeHalf - r
+  if(centerHalf < 0.0)
+    centerHalf = 0.0
+  clampPointInsideSafe(cx, cy, mapCx, mapCy, centerHalf)
 }
 
 stock edgePoint(float:ax, float:ay, float:bx, float:by, float:t, &float:ox, &float:oy) {
@@ -258,21 +299,32 @@ formationBot() {
     mapCy = 0.0
   }
 
+  // En algunos mapas el promedio de goals queda sesgado; acercarlo al origen
+  // mantiene la formacion mas centrada y lejos de paredes.
+  mapCx *= (1.0 - CENTER_PULL_TO_ORIGIN)
+  mapCy *= (1.0 - CENTER_PULL_TO_ORIGIN)
+
   // Centro de formacion (puede ajustarse hacia adentro).
   new float:cx = mapCx
   new float:cy = mapCy
 
   // Radio inicial y ajuste para garantizar vertices dentro del mapa.
   new float:triR = getTriangleRadius()
-  new float:safeHalf = MAP_SAFE_HALF
+  new float:safeHalf = MAP_SAFE_HALF - TRI_BORDER_CLEARANCE
+  if(safeHalf < TRI_FIT_MIN_RADIUS + 2.0)
+    safeHalf = TRI_FIT_MIN_RADIUS + 2.0
   fitTriangleInsideMap(cx, cy, triR, mapCx, mapCy, safeHalf)
 
   new float:tx
   new float:ty
   assignTriangleTarget(cx, cy, triR, tx, ty)
-  new float:safeInner = safeHalf - MAP_EDGE_MARGIN
-  new bool:targetWasOutside = !isInsideSafe(tx, ty, mapCx, mapCy, safeInner)
-  clampPointInsideSafe(tx, ty, mapCx, mapCy, safeHalf - MAP_EDGE_MARGIN)
+  new float:extraMargin = TRI_TARGET_MARGIN
+  if(MAP_EDGE_MARGIN > extraMargin)
+    extraMargin = MAP_EDGE_MARGIN
+  new float:targetSafeHalf = safeHalf - extraMargin
+  if(targetSafeHalf < TRI_FIT_MIN_RADIUS + 1.0)
+    targetSafeHalf = safeHalf
+  clampPointInsideSafe(tx, ty, mapCx, mapCy, targetSafeHalf)
 
   new float:lastCheck = -1000.0
   new float:lastX = cx
@@ -281,8 +333,8 @@ formationBot() {
   new float:backoffUntil = -1000.0
   new float:backoffSide = 1.0
   new float:wallEscapeUntil = -1000.0
+  new float:wallEscapeRearmUntil = -1000.0
   new float:wallEscapeSide = 1.0
-  new bool:arrivedPrinted = false
   new wallTrapCount = 0
   new float:lastWallTrapTick = -1000.0
   new bool:targetCancelled = false
@@ -295,13 +347,28 @@ formationBot() {
   new float:lastFrontBlockTick = -1000.0
   new float:forceBypassUntil = -1000.0
   new float:forceBypassSide = 1.0
+  new float:deadlockBackUntil = -1000.0
+  new float:deadlockSideUntil = -1000.0
+  new float:deadlockSide = 1.0
+  new float:deadlockCooldownUntil = -1000.0
+  new float:wallBreakBackUntil = -1000.0
+  new float:wallBreakSideUntil = -1000.0
+  new float:wallBreakRearmUntil = -1000.0
+  new float:wallBreakSide = 1.0
+  new myPassChannel = getPassChannelFor(getID())
+  new float:lastPassSent = -1000.0
+  new lastPassTarget = -1
+  new float:lastPassTargetTime = -1000.0
+  new float:yieldBackUntil = -1000.0
+  new float:yieldGlobalRearmUntil = -1000.0
+  new lastYieldSender = -1
+  new float:lastYieldRxTime = -1000.0
+  new float:blockScanBackUntil = -1000.0
+  new float:blockScanRearmUntil = -1000.0
+  new float:blockScanSide = 1.0
+  new float:noBackUntil = -1000.0
 
   walk()
-  printf("TRI-ID-%d OBJ(%d,%d) C(%d,%d) R-%d^n",
-         getID(),
-         floatround(tx), floatround(ty),
-         floatround(cx), floatround(cy),
-         floatround(triR))
 
   for(;;) {
     new float:now = getTime()
@@ -315,6 +382,114 @@ formationBot() {
     new float:dy = ty - y
     new float:err = sqrt(dx*dx + dy*dy)
 
+    // Siempre escuchar pedidos de paso, incluso estando quieto en posicion.
+    // No rearma while cede para evitar bucle de retroceso.
+    new word
+    new senderId
+    if(now >= yieldUntil && now >= yieldGlobalRearmUntil && listen(myPassChannel, word, senderId)) {
+      if(senderId != getID() && (word == WORD_PASS_LEFT || word == WORD_PASS_RIGHT)) {
+        if(senderId == lastYieldSender && now - lastYieldRxTime < YIELD_SAME_SENDER_COOLDOWN) {
+          // Ignorar spam de un mismo emisor sin bloquear la IA.
+        } else {
+          yieldSide = (word == WORD_PASS_LEFT ? 1.0 : -1.0)
+
+          yieldDir = getDirection() + PI + yieldSide * BOT_YIELD_ANGLE
+
+          // Si estaba quieto en su posicion, retrocede un poco para abrir paso visible.
+          new allowYieldBack = 0
+          if(now >= noBackUntil && isStanding())
+            allowYieldBack = 1
+          yieldHardBack = (allowYieldBack != 0)
+          yieldBackUntil = now
+          if(yieldHardBack) {
+            yieldBackUntil = now + YIELD_BACK_ONLY_TIME
+            noBackUntil = yieldBackUntil + BACK_PHASE_MIN_GAP
+          }
+          yieldUntil = now + BOT_YIELD_TIME + BOT_YIELD_EXTRA_TIME
+          yieldGlobalRearmUntil = yieldUntil + YIELD_GLOBAL_REARM_DT
+          lastYieldSender = senderId
+          lastYieldRxTime = now
+        }
+      }
+    }
+
+    // Si este bot esta cediendo el paso, ejecutar maniobra temporal.
+    if(now < yieldUntil) {
+      rotateTo(yieldDir)
+
+      if(sight() < WALL_AVOID_DIST)
+        rotateTo(getDirection() - yieldSide * PI/2.8)
+
+      if(yieldHardBack && now < yieldBackUntil) {
+        if(isStanding() || isWalking() || isRunning() || isWalkingcr())
+          walkbk()
+      } else {
+        yieldHardBack = false
+        if(isStanding() || isWalkingbk() || isWalkingcr())
+          walk()
+      }
+
+      wait(LOOP_DT)
+      continue
+    }
+
+    // Paso lateral breve y aleatorio para romper choques bot-bot.
+    if(now < blockScanBackUntil) {
+      rotateTo(getDirection() + blockScanSide * PI/2.0)
+      if(sight() < WALL_AVOID_DIST)
+        rotateTo(getDirection() - blockScanSide * PI/2.4)
+
+      if(isStanding() || isWalkingbk() || isWalkingcr())
+        walk()
+
+      wait(LOOP_DT)
+      continue
+    }
+
+    // Ruptura fuerte de estancamiento con paredes/borde: retrocede y luego sale lateral.
+    if(now < wallBreakBackUntil) {
+      rotateTo(getDirection() + wallBreakSide * PI/2.2)
+      if(isStanding() || isWalking() || isRunning() || isWalkingcr())
+        walkbk()
+
+      wait(LOOP_DT)
+      continue
+    }
+
+    if(now < wallBreakSideUntil) {
+      rotateTo(getDirection() + wallBreakSide * WALL_BREAK_ANGLE)
+      if(sight() < WALL_AVOID_DIST)
+        rotateTo(getDirection() - wallBreakSide * PI/2.4)
+
+      if(isStanding() || isWalkingbk() || isWalkingcr())
+        walk()
+
+      wait(LOOP_DT)
+      continue
+    }
+
+    // Ruptura de estancamiento entre bots: atras + lateral y luego vuelve a su objetivo.
+    if(now < deadlockBackUntil) {
+      rotateTo(getDirection() + deadlockSide * PI/2.4)
+      if(isStanding() || isWalking() || isRunning() || isWalkingcr())
+        walkbk()
+
+      wait(LOOP_DT)
+      continue
+    }
+
+    if(now < deadlockSideUntil) {
+      rotateTo(getDirection() + deadlockSide * DEADLOCK_SIDE_ANGLE)
+      if(sight() < WALL_AVOID_DIST)
+        rotateTo(getDirection() - deadlockSide * PI/2.3)
+
+      if(isStanding() || isWalkingbk() || isWalkingcr())
+        walk()
+
+      wait(LOOP_DT)
+      continue
+    }
+
     // Fallback de seguridad: si objetivo provoca choque de pared persistente, cancelar.
     if(targetCancelled) {
       if(isWalking() || isRunning() || isWalkingbk() || isWalkingcr())
@@ -325,14 +500,6 @@ formationBot() {
     }
 
     if(err <= ARRIVE_RADIUS) {
-      if(!arrivedPrinted) {
-        if(getID() == 0)
-          printf("TRI-ID-%d JEFE-CENTRO-OK^n", getID())
-        else
-          printf("TRI-ID-%d POSICION-OK^n", getID())
-        arrivedPrinted = true
-      }
-
       if(isWalking() || isRunning() || isWalkingbk() || isWalkingcr())
         stand()
 
@@ -340,12 +507,10 @@ formationBot() {
       continue
     }
 
-    // Si aun no llego, seguir navegando.
-    arrivedPrinted = false
-
     // Escape fuerte de pared para no quedar empujando infinito.
     if(now < wallEscapeUntil) {
       rotateTo(getDirection() + wallEscapeSide * WALL_ESCAPE_ANGLE)
+
       if(isStanding() || isWalkingbk() || isWalkingcr())
         walk()
 
@@ -363,25 +528,6 @@ formationBot() {
 
       if(isStanding() || isWalkingbk() || isWalkingcr())
         walk()
-
-      wait(LOOP_DT)
-      continue
-    }
-
-    // Si este bot esta cediendo el paso, ejecutar maniobra temporal.
-    if(now < yieldUntil) {
-      rotateTo(yieldDir)
-
-      if(sight() < WALL_AVOID_DIST)
-        rotateTo(getDirection() - yieldSide * PI/2.8)
-
-      if(yieldHardBack) {
-        if(isStanding() || isWalking() || isRunning() || isWalkingcr())
-          walkbk()
-      } else {
-        if(isStanding() || isWalkingbk() || isWalkingcr())
-          walk()
-      }
 
       wait(LOOP_DT)
       continue
@@ -409,8 +555,11 @@ formationBot() {
       rotateTo(getDirection() + (random(2) == 0 ? PI/4.0 : -PI/4.0))
 
     if(sight() < WALL_TRAP_DIST) {
-      wallEscapeUntil = now + WALL_ESCAPE_TIME
-      wallEscapeSide = (random(2) == 0 ? 1.0 : -1.0)
+      if(now >= wallEscapeRearmUntil) {
+        wallEscapeUntil = now + WALL_ESCAPE_TIME
+        wallEscapeSide = (random(2) == 0 ? 1.0 : -1.0)
+        wallEscapeRearmUntil = now + WALL_ESCAPE_REARM_DT
+      }
 
       if(now - lastWallTrapTick >= WALL_TRAP_COUNT_DT) {
         ++wallTrapCount
@@ -427,11 +576,6 @@ formationBot() {
       ty = y
       if(isWalking() || isRunning() || isWalkingbk() || isWalkingcr())
         stand()
-
-      if(targetWasOutside)
-        printf("TRI-ID-%d OBJ-CANCELADO-PARED (OBJ-FUERA)^n", getID())
-      else
-        printf("TRI-ID-%d OBJ-CANCELADO-PARED (TRAMPA-BORDE)^n", getID())
 
       wait(LOOP_DT)
       continue
@@ -452,16 +596,51 @@ formationBot() {
       frontBlockId = blockId
       lastFrontBlockTick = now
 
+      // Solo el bot que efectivamente esta moviendose puede pedir paso.
+      if(err > ARRIVE_RADIUS && now - lastPassSent >= getTimeNeededFor(ACTION_SPEAK)) {
+        if(blockId >= 0 && blockId != getID()) {
+          if(!(blockId == lastPassTarget && now - lastPassTargetTime < PASS_RESEND_SAME_TARGET_DT)) {
+            new passWord = (blockYaw > 0.0 ? WORD_PASS_RIGHT : WORD_PASS_LEFT)
+            new passChannel = getPassChannelFor(blockId)
+            if(speak(passChannel, passWord)) {
+              lastPassSent = now
+              lastPassTarget = blockId
+              lastPassTargetTime = now
+            }
+          }
+        }
+      }
+
       new severeBlock = (frontBlockCount >= BOT_BLOCK_REPEAT_MAX || blockDist < 1.05)
+
+      // Si el bloqueo frontal persiste, forzar secuencia atras+lateral.
+      if(severeBlock && now >= deadlockCooldownUntil) {
+        new float:pairSide = getPairSideSign(getID(), blockId)
+        deadlockSide = (getID() > blockId ? pairSide : -pairSide)
+        new float:deadBack = 0.0
+        if(now >= noBackUntil)
+          deadBack = DEADLOCK_BACK_TIME
+
+        deadlockBackUntil = now + deadBack
+        deadlockSideUntil = deadlockBackUntil + DEADLOCK_SIDE_TIME
+        deadlockCooldownUntil = deadlockSideUntil + DEADLOCK_COOLDOWN
+        noBackUntil = deadlockBackUntil + BACK_PHASE_MIN_GAP
+        yieldUntil = -1000.0
+        yieldBackUntil = -1000.0
+        forceBypassUntil = -1000.0
+
+        wait(LOOP_DT)
+        continue
+      }
 
       // El ID mas alto cede para romper deadlocks de frente.
       if(getID() > blockId) {
         yieldSide = getPairSideSign(getID(), blockId)
         yieldDir = getDirection() + yieldSide * BOT_YIELD_ANGLE
-        yieldHardBack = (severeBlock != 0)
+        // Evitar bucle de retroceso: ceder por desplazamiento lateral/avance.
+        yieldHardBack = false
         yieldUntil = now + BOT_YIELD_TIME
-        if(yieldHardBack)
-          yieldUntil += BOT_YIELD_EXTRA_TIME
+        yieldUntil += BOT_YIELD_EXTRA_TIME
 
         wait(LOOP_DT)
         continue
@@ -476,9 +655,11 @@ formationBot() {
       }
 
       rotateTo(getDirection() + (blockYaw > 0.0 ? -PI/6.0 : PI/6.0))
-    } else if(now - lastFrontBlockTick >= BOT_BLOCK_REPEAT_DT && frontBlockCount > 0) {
-      --frontBlockCount
-      lastFrontBlockTick = now
+    } else {
+      if(now - lastFrontBlockTick >= BOT_BLOCK_REPEAT_DT && frontBlockCount > 0) {
+        --frontBlockCount
+        lastFrontBlockTick = now
+      }
     }
 
     if(isStanding() || isWalkingbk() || isWalkingcr())
@@ -489,11 +670,61 @@ formationBot() {
       new float:mx = x - lastX
       new float:my = y - lastY
       new float:moved = sqrt(mx*mx + my*my)
+      new float:edgeX = abs(x - mapCx)
+      new float:edgeY = abs(y - mapCy)
+      new nearEdge = 0
+      if(edgeX >= targetSafeHalf - EDGE_NEAR_MARGIN ||
+         edgeY >= targetSafeHalf - EDGE_NEAR_MARGIN)
+        nearEdge = 1
 
+      new stalled = 0
       if(err > ARRIVE_RADIUS && moved < MOVE_EPS)
+        stalled = 1
+
+      if(stalled != 0)
         ++stuckCount
-      else
+      else if(stuckCount > 0)
+        --stuckCount
+
+      new wallClose = 0
+      if(sight() < WALL_TRAP_DIST)
+        wallClose = 1
+      new wallTrapPersistent = 0
+      if(wallClose != 0 && stuckCount >= 2)
+        wallTrapPersistent = 1
+
+      // Si esta cerca de borde y no progresa, ejecutar ruptura fuerte de pared.
+      if(err > ARRIVE_RADIUS &&
+         now >= wallBreakRearmUntil &&
+         ((nearEdge != 0 && (stalled != 0 || wallClose != 0)) || wallTrapPersistent != 0)) {
+        if(abs(x - mapCx) >= abs(y - mapCy))
+          wallBreakSide = (x >= mapCx ? -1.0 : 1.0)
+        else
+          wallBreakSide = (y >= mapCy ? -1.0 : 1.0)
+
+        if(random(2) == 0)
+          wallBreakSide = -wallBreakSide
+
+        new float:wallBack = 0.0
+        if(now >= noBackUntil)
+          wallBack = WALL_BREAK_BACK_TIME
+
+        wallBreakBackUntil = now + wallBack
+        wallBreakSideUntil = wallBreakBackUntil + WALL_BREAK_SIDE_TIME
+        wallBreakRearmUntil = wallBreakSideUntil + WALL_BREAK_REARM_DT
+        noBackUntil = wallBreakBackUntil + BACK_PHASE_MIN_GAP
+        wallEscapeUntil = -1000.0
+        backoffUntil = -1000.0
+        wallTrapCount = 0
         stuckCount = 0
+
+        lastX = x
+        lastY = y
+        lastCheck = now
+
+        wait(LOOP_DT)
+        continue
+      }
 
       lastX = x
       lastY = y
@@ -501,8 +732,21 @@ formationBot() {
     }
 
     if(stuckCount >= STUCK_MAX) {
-      backoffUntil = now + BACKOFF_TIME
-      backoffSide = (random(2) == 0 ? 1.0 : -1.0)
+      // ~1 segundo inmovil -> paso lateral corto (izq/der) para destrabar.
+      if(now >= blockScanRearmUntil &&
+         now >= yieldUntil &&
+         now >= wallBreakSideUntil &&
+         now >= deadlockSideUntil &&
+         now >= wallEscapeUntil &&
+         now >= noBackUntil) {
+        blockScanSide = (random(2) == 0 ? 1.0 : -1.0)
+        blockScanBackUntil = now + BLOCK_SCAN_BACK_TIME
+        blockScanRearmUntil = blockScanBackUntil + BLOCK_SCAN_REARM_DT
+      } else {
+        backoffUntil = now + BACKOFF_TIME
+        backoffSide = (random(2) == 0 ? 1.0 : -1.0)
+      }
+
       stuckCount = 0
     }
 
