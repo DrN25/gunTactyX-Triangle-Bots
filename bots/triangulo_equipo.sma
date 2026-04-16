@@ -13,6 +13,7 @@ new const float:PI = 3.1415
 new const float:TWO_PI = 6.2830
 
 new const float:ARRIVE_RADIUS = 0.70
+new const float:ARRIVE_RESET_RADIUS = 1.10
 new const float:WALL_AVOID_DIST = 2.2
 new const float:BLOCK_DIST = 1.9
 new const float:BLOCK_YAW = 0.65
@@ -367,6 +368,7 @@ formationBot() {
   new float:blockScanRearmUntil = -1000.0
   new float:blockScanSide = 1.0
   new float:noBackUntil = -1000.0
+  new bool:arriveLogged = false
 
   walk()
 
@@ -381,6 +383,10 @@ formationBot() {
     new float:dx = tx - x
     new float:dy = ty - y
     new float:err = sqrt(dx*dx + dy*dy)
+
+    // Rehabilita el aviso de llegada si el bot se alejo del objetivo.
+    if(err > ARRIVE_RESET_RADIUS)
+      arriveLogged = false
 
     // Siempre escuchar pedidos de paso, incluso estando quieto en posicion.
     // No rearma while cede para evitar bucle de retroceso.
@@ -500,6 +506,11 @@ formationBot() {
     }
 
     if(err <= ARRIVE_RADIUS) {
+      if(!arriveLogged) {
+        printf("bot %d - llego a objetivo^n", getID())
+        arriveLogged = true
+      }
+
       if(isWalking() || isRunning() || isWalkingbk() || isWalkingcr())
         stand()
 
