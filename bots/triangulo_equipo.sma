@@ -12,8 +12,11 @@
 new const float:PI = 3.1415
 new const float:TWO_PI = 6.2830
 
-new const float:ARRIVE_RADIUS = 0.25
+new const float:ARRIVE_RADIUS = 0.38
 new const float:ARRIVE_RESET_RADIUS = 1.10
+new const float:FINAL_APPROACH_RADIUS = 1.10
+new const float:FINAL_ALIGN_YAW = 0.18
+new const float:NAV_TURN_DEADBAND = 0.10
 new const float:WALL_AVOID_DIST = 2.2
 new const float:BLOCK_DIST = 1.9
 new const float:BLOCK_YAW = 0.65
@@ -27,7 +30,7 @@ new const float:MAP_EDGE_MARGIN = 2.5
 
 new const float:MOVE_CHECK_DT = 0.35
 new const float:MOVE_EPS = 0.07
-new const STUCK_MAX = 5
+new const STUCK_MAX = 5 
 new const float:BACKOFF_TIME = 0.50
 new const float:BACKOFF_ANGLE = 0.90
 new const float:WALL_TRAP_DIST = 1.20
@@ -67,6 +70,7 @@ new const float:YIELD_SAME_SENDER_COOLDOWN = 0.55
 new const float:YIELD_GLOBAL_REARM_DT = 0.25
 new const float:BLOCK_SCAN_BACK_TIME = 0.20
 new const float:BACK_PHASE_MIN_GAP = 2.20
+new const float:MAX_CONTINUOUS_BACK_TIME = 0.72
 
 new const float:LOOP_DT = 0.04
 
@@ -331,7 +335,18 @@ formationBot() {
   if(targetSafeHalf < TRI_FIT_MIN_RADIUS + 1.0)
     targetSafeHalf = safeHalf
   clampPointInsideSafe(tx, ty, mapCx, mapCy, targetSafeHalf)
-  printf("INIT %d %d,%d^n", getID(), floatround(tx), floatround(ty))
+
+  // Fallback ligero: si un no-lider quedo en el centro, desplazarlo un poco.
+  if(getID() != 0 && abs(tx - cx) < 0.05 && abs(ty - cy) < 0.05) {
+    switch(getID() % 4) {
+      case 0: tx += 1.0
+      case 1: tx -= 1.0
+      case 2: ty += 1.0
+      default: ty -= 1.0
+    }
+    clampPointInsideSafe(tx, ty, mapCx, mapCy, targetSafeHalf)
+  }
+
 
   new float:lastCheck = -1000.0
   new float:lastX = cx
@@ -374,11 +389,45 @@ formationBot() {
   new float:blockScanSide = 1.0
   new float:noBackUntil = -1000.0
   new bool:arriveLogged = false
+  new backoffChainCount = 0
+  new float:backoffChainResetUntil = -1000.0
+  new float:backMotionStart = -1000.0
 
   walk()
 
   for(;;) {
     new float:now = getTime()
+
+    // Guard rail: nunca permitir retroceso continuo indefinido.
+    if(isWalkingbk()) {
+      if(backMotionStart < -999.0)
+        backMotionStart = now
+
+      if(now - backMotionStart >= MAX_CONTINUOUS_BACK_TIME) {
+        backoffUntil = -1000.0
+        blockScanRearmUntil = -1000.0
+        yieldBackUntil = -1000.0
+        deadlockBackUntil = -1000.0
+        wallBreakBackUntil = -1000.0
+        wallEscapeUntil = -1000.0
+        noBackUntil = now + BACK_PHASE_MIN_GAP
+        backoffChainCount = 0
+        backoffChainResetUntil = -1000.0
+        forceBypassSide = (random(2) == 0 ? 1.0 : -1.0)
+        forceBypassUntil = now + BOT_FORCE_BYPASS_TIME + 0.22
+
+        if(isWalkingbk() || isWalking() || isRunning() || isWalkingcr())
+          stand()
+
+        if(canIssueWalk())
+          walk()
+
+        wait(LOOP_DT)
+        continue
+      }
+    } else {
+      backMotionStart = -1000.0
+    }
 
     new float:x
     new float:y
@@ -398,9 +447,56 @@ formationBot() {
        now >= yieldBackUntil &&
        now >= wallBreakBackUntil &&
        now >= deadlockBackUntil &&
-       now >= noBackUntil) {
-      stand()
+       now >= backoffUntil) {
       walk()
+    }
+
+    // Ancla de destino: cerca del objetivo, cancelar maniobras transitorias
+    // para evitar caminar en arco alrededor del punto final.
+    if(arriveLogged && err <= ARRIVE_RESET_RADIUS) {
+      yieldUntil = -1000.0
+      yieldBackUntil = -1000.0
+      blockScanBackUntil = -1000.0
+      blockScanRearmUntil = -1000.0
+      backoffUntil = -1000.0
+      forceBypassUntil = -1000.0
+      deadlockBackUntil = -1000.0
+      deadlockSideUntil = -1000.0
+      wallBreakBackUntil = -1000.0
+      wallBreakSideUntil = -1000.0
+      wallEscapeUntil = -1000.0
+
+      if(isWalking() || isRunning() || isWalkingbk() || isWalkingcr())
+        stand()
+
+      wait(LOOP_DT)
+      continue
+    }
+
+    if(err <= ARRIVE_RADIUS) {
+      if(!arriveLogged) {
+        printf("bot %d llego a destino %d,%d^n", getID(), floatround(tx), floatround(ty))
+        arriveLogged = true
+      }
+
+      backoffChainCount = 0
+      yieldUntil = -1000.0
+      yieldBackUntil = -1000.0
+      blockScanBackUntil = -1000.0
+      blockScanRearmUntil = -1000.0
+      backoffUntil = -1000.0
+      forceBypassUntil = -1000.0
+      deadlockBackUntil = -1000.0
+      deadlockSideUntil = -1000.0
+      wallBreakBackUntil = -1000.0
+      wallBreakSideUntil = -1000.0
+      wallEscapeUntil = -1000.0
+
+      if(isWalking() || isRunning() || isWalkingbk() || isWalkingcr())
+        stand()
+
+      wait(LOOP_DT)
+      continue
     }
 
     // Siempre escuchar pedidos de paso, incluso estando quieto en posicion.
@@ -511,28 +607,6 @@ formationBot() {
       continue
     }
 
-    // Si ya llego una vez, mantener posicion mientras siga dentro del radio de reset.
-    if(arriveLogged && err <= ARRIVE_RESET_RADIUS) {
-      if(isWalking() || isRunning() || isWalkingbk() || isWalkingcr())
-        stand()
-
-      wait(LOOP_DT)
-      continue
-    }
-
-    if(err <= ARRIVE_RADIUS) {
-      if(!arriveLogged) {
-        printf("bot %d - llego a objetivo^n", getID())
-        arriveLogged = true
-      }
-
-      if(isWalking() || isRunning() || isWalkingbk() || isWalkingcr())
-        stand()
-
-      wait(LOOP_DT)
-      continue
-    }
-
     // Escape fuerte de pared para no quedar empujando infinito.
     if(now < wallEscapeUntil) {
       rotateTo(getDirection() + wallEscapeSide * WALL_ESCAPE_ANGLE)
@@ -587,11 +661,27 @@ formationBot() {
     }
 
     // Navegacion principal al objetivo.
-    rotateTo(atan2(dy, dx))
+    new nearFinalApproach = 0
+    if(err <= FINAL_APPROACH_RADIUS)
+      nearFinalApproach = 1
 
-    // Evitar pared.
-    if(sight() < WALL_AVOID_DIST)
-      rotateTo(getDirection() + (random(2) == 0 ? PI/4.0 : -PI/4.0))
+    new float:toTarget = atan2(dy, dx)
+    new float:yawErrToTarget = wrapPi(toTarget - getDirection())
+    if(abs(yawErrToTarget) > NAV_TURN_DEADBAND)
+      rotateTo(toTarget)
+
+    // Cerca del objetivo: primero alinear rumbo, luego avanzar corto para evitar orbitas.
+    if(nearFinalApproach != 0 && abs(yawErrToTarget) > FINAL_ALIGN_YAW) {
+      if(isWalking() || isRunning() || isWalkingbk() || isWalkingcr())
+        stand()
+    } else if(nearFinalApproach != 0) {
+      if(canIssueWalk())
+        walk()
+    } else {
+      // Evitar pared solo en navegacion normal (lejos del objetivo).
+      if(sight() < WALL_AVOID_DIST)
+        rotateTo(getDirection() + (random(2) == 0 ? PI/4.0 : -PI/4.0))
+    }
 
     if(sight() < WALL_TRAP_DIST) {
       if(now >= wallEscapeRearmUntil) {
@@ -701,7 +791,7 @@ formationBot() {
       }
     }
 
-    if(canIssueWalk())
+    if(nearFinalApproach == 0 && canIssueWalk())
       walk()
 
     // Deteccion de atasco local.
@@ -717,13 +807,18 @@ formationBot() {
         nearEdge = 1
 
       new stalled = 0
-      if(err > ARRIVE_RADIUS && moved < MOVE_EPS)
-        stalled = 1
+      if(err > ARRIVE_RADIUS) {
+        if(isStanding() || moved < MOVE_EPS)
+          stalled = 1
+      }
 
       if(stalled != 0)
         ++stuckCount
       else if(stuckCount > 0)
         --stuckCount
+
+      if(stalled == 0)
+        backoffChainCount = 0
 
       new wallClose = 0
       if(sight() < WALL_TRAP_DIST)
@@ -772,10 +867,34 @@ formationBot() {
     }
 
     if(stuckCount >= STUCK_MAX) {
-      // ~1.5s+ inmovil -> retroceso corto para destrabar y reintentar ruta.
-      backoffUntil = now + BACKOFF_TIME + 0.10
-      blockScanRearmUntil = backoffUntil + BLOCK_SCAN_BACK_TIME
-      backoffSide = (random(2) == 0 ? 1.0 : -1.0)
+      if(now > backoffChainResetUntil)
+        backoffChainCount = 0
+
+      ++backoffChainCount
+      backoffChainResetUntil = now + 2.0
+
+      // Si encadena varios retrocesos, forzar salida por bypass adelante/lateral.
+      if(backoffChainCount >= 3) {
+        forceBypassSide = (random(2) == 0 ? 1.0 : -1.0)
+        forceBypassUntil = now + BOT_FORCE_BYPASS_TIME + 0.20
+        noBackUntil = now + BACK_PHASE_MIN_GAP
+        backoffUntil = -1000.0
+        blockScanRearmUntil = -1000.0
+        backoffChainCount = 0
+      } else {
+        // Si no se permite retroceso por cooldown, usar bypass y no rearmar backoff.
+        if(now >= noBackUntil) {
+          // ~1.5s+ inmovil -> retroceso corto para destrabar y reintentar ruta.
+          backoffUntil = now + BACKOFF_TIME + 0.10
+          blockScanRearmUntil = backoffUntil + BLOCK_SCAN_BACK_TIME
+          backoffSide = (random(2) == 0 ? 1.0 : -1.0)
+        } else {
+          forceBypassSide = (random(2) == 0 ? 1.0 : -1.0)
+          forceBypassUntil = now + BOT_FORCE_BYPASS_TIME
+          backoffUntil = -1000.0
+          blockScanRearmUntil = -1000.0
+        }
+      }
 
       stuckCount = 0
     }
