@@ -12,7 +12,7 @@
 new const float:PI = 3.1415
 new const float:TWO_PI = 6.2830
 
-new const float:ARRIVE_RADIUS = 0.70
+new const float:ARRIVE_RADIUS = 0.25
 new const float:ARRIVE_RESET_RADIUS = 1.10
 new const float:WALL_AVOID_DIST = 2.2
 new const float:BLOCK_DIST = 1.9
@@ -104,6 +104,12 @@ stock rotateTo(float:absAngle) {
 
 stock bool:isFriendWarrior(item) {
   if((item & ITEM_FRIEND) && (item & ITEM_WARRIOR))
+    return true
+  return false
+}
+
+stock bool:canIssueWalk() {
+  if(isStanding() || isWalking() || isRunning() || isWalkingbk() || isWalkingcr())
     return true
   return false
 }
@@ -327,6 +333,10 @@ formationBot() {
     targetSafeHalf = safeHalf
   clampPointInsideSafe(tx, ty, mapCx, mapCy, targetSafeHalf)
 
+  new initDestX = floatround(tx)
+  new initDestY = floatround(ty)
+  printf("INITIAL bot %d - destino %d,%d^n", getID(), initDestX, initDestY)
+
   new float:lastCheck = -1000.0
   new float:lastX = cx
   new float:lastY = cy
@@ -338,7 +348,6 @@ formationBot() {
   new float:wallEscapeSide = 1.0
   new wallTrapCount = 0
   new float:lastWallTrapTick = -1000.0
-  new bool:targetCancelled = false
   new float:yieldUntil = -1000.0
   new float:yieldDir = 0.0
   new float:yieldSide = 1.0
@@ -388,6 +397,16 @@ formationBot() {
     if(err > ARRIVE_RESET_RADIUS)
       arriveLogged = false
 
+    // Reset conservador: salir de walk-back si todas las fases de retroceso ya expiraron.
+    if(isWalkingbk() && err > ARRIVE_RADIUS &&
+       now >= yieldBackUntil &&
+       now >= wallBreakBackUntil &&
+       now >= deadlockBackUntil &&
+       now >= noBackUntil) {
+      stand()
+      walk()
+    }
+
     // Siempre escuchar pedidos de paso, incluso estando quieto en posicion.
     // No rearma while cede para evitar bucle de retroceso.
     new word
@@ -431,7 +450,7 @@ formationBot() {
           walkbk()
       } else {
         yieldHardBack = false
-        if(isStanding() || isWalkingbk() || isWalkingcr())
+        if(canIssueWalk())
           walk()
       }
 
@@ -445,7 +464,7 @@ formationBot() {
       if(sight() < WALL_AVOID_DIST)
         rotateTo(getDirection() - blockScanSide * PI/2.4)
 
-      if(isStanding() || isWalkingbk() || isWalkingcr())
+      if(canIssueWalk())
         walk()
 
       wait(LOOP_DT)
@@ -467,7 +486,7 @@ formationBot() {
       if(sight() < WALL_AVOID_DIST)
         rotateTo(getDirection() - wallBreakSide * PI/2.4)
 
-      if(isStanding() || isWalkingbk() || isWalkingcr())
+      if(canIssueWalk())
         walk()
 
       wait(LOOP_DT)
@@ -489,15 +508,15 @@ formationBot() {
       if(sight() < WALL_AVOID_DIST)
         rotateTo(getDirection() - deadlockSide * PI/2.3)
 
-      if(isStanding() || isWalkingbk() || isWalkingcr())
+      if(canIssueWalk())
         walk()
 
       wait(LOOP_DT)
       continue
     }
 
-    // Fallback de seguridad: si objetivo provoca choque de pared persistente, cancelar.
-    if(targetCancelled) {
+    // Si ya llego una vez, mantener posicion mientras siga dentro del radio de reset.
+    if(arriveLogged && err <= ARRIVE_RESET_RADIUS) {
       if(isWalking() || isRunning() || isWalkingbk() || isWalkingcr())
         stand()
 
@@ -522,7 +541,7 @@ formationBot() {
     if(now < wallEscapeUntil) {
       rotateTo(getDirection() + wallEscapeSide * WALL_ESCAPE_ANGLE)
 
-      if(isStanding() || isWalkingbk() || isWalkingcr())
+      if(canIssueWalk())
         walk()
 
       if(sight() < WALL_TRAP_DIST)
@@ -537,7 +556,7 @@ formationBot() {
       if(sight() < WALL_AVOID_DIST)
         rotateTo(getDirection() - backoffSide * PI/2.5)
 
-      if(isStanding() || isWalkingbk() || isWalkingcr())
+      if(canIssueWalk())
         walk()
 
       wait(LOOP_DT)
@@ -551,7 +570,7 @@ formationBot() {
       if(sight() < WALL_AVOID_DIST)
         rotateTo(getDirection() - forceBypassSide * PI/2.6)
 
-      if(isStanding() || isWalkingbk() || isWalkingcr())
+      if(canIssueWalk())
         walk()
 
       wait(LOOP_DT)
@@ -582,11 +601,10 @@ formationBot() {
     }
 
     if(err > ARRIVE_RADIUS && wallTrapCount >= WALL_TRAP_COUNT_MAX) {
-      targetCancelled = true
-      tx = x
-      ty = y
-      if(isWalking() || isRunning() || isWalkingbk() || isWalkingcr())
-        stand()
+      wallEscapeUntil = now + WALL_ESCAPE_TIME
+      wallEscapeSide = (random(2) == 0 ? 1.0 : -1.0)
+      wallEscapeRearmUntil = now + WALL_ESCAPE_REARM_DT
+      wallTrapCount = 0
 
       wait(LOOP_DT)
       continue
@@ -673,7 +691,7 @@ formationBot() {
       }
     }
 
-    if(isStanding() || isWalkingbk() || isWalkingcr())
+    if(canIssueWalk())
       walk()
 
     // Deteccion de atasco local.
